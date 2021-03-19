@@ -4,5 +4,6 @@ dist/
 log/
 *.egg-info/
 *.iml
+*.pem
 *.pyc
 config.test.yml

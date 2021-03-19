@@ -14,9 +14,9 @@ Fly me **To The Moon!**
   architecture.
 - Runs multiple trading strategies concurrently across multiple markets.
 - Makes trading decisions based on live market data.
-- Provides a REST API to monitor trading activity and control application behaviour.
+- Provides a REST API service to monitor trading activity and control application behaviour of
+  one or more moonship instances.
 - Supported cryptocurrency exchanges:
   - Binance
   - Luno
   - VALR
-  

@@ -1,5 +1,12 @@
 moonship:
 
+  api:
+    port: 443
+    ssl_cert: cert.pem
+    ssl_key: key.pem
+    user: ms
+    password: $2b$12$JyIZJl9BZgKXX8fXAQHdVOGiaGwuTf.xglYajD4EJuPuK13RP0dRi
+
   strategies:
     test:
       algo: moonship.algo.test.LogMarketInfo
@@ -18,6 +25,11 @@ moonship:
     other:
       symbol: OTHER
       client: moonship.client.other.OtherClient
+
+  redis:
+    url: rediss://:password@localhost:6379
+    ssl_enabled: true
+    ssl_verify_cert: true
 
   logging:
     root:

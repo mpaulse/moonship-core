@@ -24,14 +24,18 @@
 
 import asyncio
 import importlib
+import io
 import logging
 
 from datetime import timezone
 from moonship.core import *
+from moonship.core.ipc import *
+from moonship.core.redis import *
 from moonship.core.strategy import Strategy
 from typing import Optional
 
 RECENT_TRADE_LIST_LIMIT = 1000
+DEFAULT_ENGINE_NAME = "engine"
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +148,18 @@ class MarketManager(MarketSubscriber):
         self.market._remove_completed_pending_order(event.order)
 
 
-class TradeEngine:
+class TradingEngine:
 
     def __init__(self, config: Config) -> None:
+        self.config = config
         self.markets: dict[str, MarketManager] = {}
         self.strategies: dict[str, Strategy] = {}
+        self.name = config.get("moonship.engine.name")
+        if not isinstance(self.name, str):
+            self.name = DEFAULT_ENGINE_NAME
+        if config.get("moonship.redis") is not None:
+            self.shared_cache: SharedCache = RedisSharedCache(config)
+            self.message_bus: MessageBus = RedisMessageBus(config)
         self._init_markets(config)
         self._init_strategies(config)
 
@@ -179,22 +190,42 @@ class TradeEngine:
                 if market is None:
                     raise StartUpException(f"Invalid market specified for {strategy_name} strategy: {market_name}")
                 markets[market_name] = market.market
-            cls = self._load_class("algo", strategy_config, TradingAlgo)
-            algo = cls(strategy_name, markets, config)
-            auto_start = strategy_config.get("auto_start")
-            if not isinstance(auto_start, bool):
-                auto_start = True
-            self.strategies[strategy_name] = Strategy(strategy_name, algo, markets_names, auto_start)
+            algo_class = self._load_class("algo", strategy_config, TradingAlgo)
+            self.strategies[strategy_name] = Strategy(
+                strategy_name,
+                self.name,
+                algo_class,
+                markets,
+                self.shared_cache)
 
     async def start(self) -> None:
+        if self.shared_cache is not None:
+            if self.name == DEFAULT_ENGINE_NAME:
+                instances = await self.shared_cache.set_entries("instances")
+                if self.name in instances:
+                    for k in range(2, len(instances) + 2):
+                        n = f"{DEFAULT_ENGINE_NAME}{k}"
+                        if n not in instances:
+                            self.name = n
+                            break
+            b = self.shared_cache.start_bulk()
+            b.set_add("instances", self.name)
+            for strategy_name in self.strategies.keys():
+                b.set_add(f"{self.name}.strategies", strategy_name)
+                b.map_set(f"{self.name}.{strategy_name}", {"running": "false"})
+                strategy_config = self.config.get(f"moonship.strategies.{strategy_name}")
+                if isinstance(strategy_config, Config):
+                    b.map_set(f"{self.name}.{strategy_name}.config", self._flatten_dict(strategy_config.dict))
+            await b.execute()
         for strategy in self.strategies.values():
+            strategy.init_config(self.config)
             if strategy.auto_start:
                 await self.start_strategy(strategy.name)
 
     async def start_strategy(self, name: str) -> None:
         strategy = self.strategies.get(name)
         if strategy is not None:
-            for market_name in strategy.market_names:
+            for market_name in strategy.markets.keys():
                 market = self.markets[market_name]
                 if market.market.status == MarketStatus.CLOSED:
                     await market.open()
@@ -209,12 +240,34 @@ class TradeEngine:
             if market.market.status != MarketStatus.CLOSED:
                 await market.close()
                 logger.info(f"Closed {market.market.name} market")
+        if self.shared_cache is not None:
+            b = self.shared_cache.start_bulk()
+            b.set_remove("instances", self.name)
+            b.delete(f"{self.name}.strategies")
+            for strategy_name in self.strategies.keys():
+                b.delete(f"{self.name}.{strategy_name}")
+                b.delete(f"{self.name}.{strategy_name}.config")
+            await b.execute()
 
     async def stop_strategy(self, name: str) -> None:
         strategy = self.strategies.get(name)
-        if strategy is not None and strategy.is_running:
+        if strategy is not None and strategy.running:
             await strategy.stop()
             logger.info(f"Stopped {strategy.name} strategy")
+
+    def _flatten_dict(self, object: dict, result: dict[str, str] = None, key_prefix="") -> dict[str, str]:
+        if result is None:
+            result = {}
+        for k, v in object.items():
+            if isinstance(v, dict):
+                self._flatten_dict(v, result, f"{k}.")
+            elif isinstance(v, list):
+                s = io.StringIO()
+                print(*v, sep=", ", file=s)
+                result[f"{key_prefix}k"] = s.getvalue()
+            else:
+                result[f"{key_prefix}k"] = str(v)
+        return result
 
     def _load_class(self, key: str, config: Config, expected_type: type) -> type:
         class_name = config.get(key)

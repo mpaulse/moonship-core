@@ -79,13 +79,13 @@ class Config:
     def items(self) -> ItemsView[str, Union["Config", any]]:
         return ConfigItemsView(self.dict, self.key)
 
-    def get(self, key: str) -> Union["Config", any]:
+    def get(self, key: str, default: any = None) -> Union["Config", any]:
         keys = key.split(".")
         value = self.dict
         for i in range(0, len(keys)):
             value = value.get(keys[i])
             if value is None or (not isinstance(value, dict) and i < len(keys) - 1):
-                return None
+                return default
         return convert_config_value(value, self.key, key)
 
     @staticmethod

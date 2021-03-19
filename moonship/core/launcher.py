@@ -22,15 +22,16 @@
 #  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import argparse
 import asyncio
 import logging
 import logging.config
 import os
 import signal
-import sys
 
 from moonship.core import __version__, Config, StartUpException, ShutdownException
-from moonship.core.engine import TradeEngine
+from moonship.core.api import APIService
+from moonship.core.engine import TradingEngine
 
 __all__ = [
     "launch"
@@ -90,8 +91,29 @@ def handle_signal(signum, frame):
     raise ShutdownException()
 
 
+def get_args() -> argparse.Namespace:
+    arg_parser = argparse.ArgumentParser(
+        prog="moonship",
+        description="Moonship trading engine.")
+    arg_parser.add_argument(
+        "-a",
+        dest="run_api_service",
+        action="store_const",
+        const=True,
+        default=False,
+        help="run the moonship API service instead of the trading engine")
+    arg_parser.add_argument(
+        "-c",
+        dest="config_file",
+        action="store",
+        default="config.xml",
+        help="the path to the moonship config file (defaults to ./config.xml)")
+    return arg_parser.parse_args()
+
+
 def launch():
-    config = Config.load_from_file("config.yml" if len(sys.argv) < 2 else sys.argv[1])
+    args = get_args()
+    config = Config.load_from_file(args.config_file)
     configure_logging(config)
 
     logger.info(
@@ -105,13 +127,13 @@ def launch():
                                              /_/      
         """)
     logger.info(f"Version {__version__}")
-    engine = None
+    service = None
     event_loop = asyncio.get_event_loop()
     event_loop.set_exception_handler(lambda loop, context: handle_error(context))
     signal.signal(signal.SIGTERM, handle_signal)
     try:
-        engine = TradeEngine(config)
-        event_loop.create_task(engine.start())
+        service = APIService(config) if args.run_api_service else TradingEngine(config)
+        event_loop.create_task(service.start())
         event_loop.run_forever()
     except StartUpException:
         logger.exception("Start-up failed!")
@@ -121,8 +143,8 @@ def launch():
         pass
     finally:
         logger.info("Shutting down...")
-        if isinstance(engine, TradeEngine):
-            event_loop.run_until_complete(engine.stop())
+        if service is not None:
+            event_loop.run_until_complete(service.stop())
         event_loop.run_until_complete(asyncio.sleep(0.5))
         event_loop.close()
         logger.info("Thank you for flying!")

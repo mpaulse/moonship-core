@@ -5,7 +5,10 @@ name = "pypi"
 
 [packages]
 aiohttp = "*"
+aiohttp_session = { version = "*", extras = ["aioredis"] }
 aiolimiter = "*"
+aioredis = "*"
+bcrypt = "*"
 pyyaml = "*"
 sortedcontainers = "*"
 
@@ -14,3 +17,6 @@ build = "*"
 
 [requires]
 python_version = "3.9"
+
+[pipenv]
+allow_prereleases = true
